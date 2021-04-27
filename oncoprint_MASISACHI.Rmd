@@ -1,0 +1,585 @@
+---
+title: "oncoprint_heatmap"
+output:
+  word_document: default
+  pdf_document: default
+  html_document: default
+---
+
+```{r Loading libraries, include=TRUE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE, include = TRUE)
+
+# if (!requireNamespace("BiocManager", quietly = TRUE))
+#     install.packages("BiocManager")
+# 
+# BiocManager::install("ComplexHeatmap")
+
+library("grid") # required for complex heatmap
+library("here")
+library("ComplexHeatmap")
+library("tidyverse")
+library("circlize")
+library("RColorBrewer")
+library("survival")
+library("survminer")
+library("broom")
+library("cowplot")
+library("survivalAnalysis")
+```
+```{r Read mutation file}
+tile_data <- read.csv(here("NGS/data", "mutations_MASISACHI.csv"), na.strings = "", sep = ";",
+                      stringsAsFactors = FALSE)
+
+tile_data_long <- pivot_longer(tile_data,
+                               # cols = starts_with("ID"),
+                               -Gene,
+                               names_to = "Sample_ID",
+                               values_to = "Mutation_type")
+
+```
+```{r Ordering }
+
+sample_counts <- tile_data_long %>%
+  drop_na() %>%
+  count(Sample_ID) %>% 
+  rename(mutation_per_sample = n)
+
+gene_counts <- tile_data_long %>% 
+  drop_na() %>% 
+  count(Gene) %>% 
+  rename(mutation_per_gene = n)
+# left join sample_counts and gene_counts to tile_data_long
+# use left join to prevent dropping of samples without mutations
+tile_data_long <- tile_data_long %>% 
+  left_join(sample_counts, by = "Sample_ID") %>% 
+  left_join(gene_counts, by = "Gene") %>% 
+  # create a new column to check if samples have at least one mutation
+  mutate(mutation = case_when(!is.na(Mutation_type) ~ "1")) %>%
+  # reorder data frame by reverse mutation_per_sample, presence of mutation
+  # and reverse mutation_per_gene
+  arrange(-mutation_per_sample,mutation,-mutation_per_gene) %>%
+  # set Sample_ID column as factor and define the levels as unique Sample_ID
+  # this will prevent dropping levels when reordering
+  # use this to reorder different graphs
+  mutate(Sample_ID = factor(Sample_ID, levels = unique(Sample_ID)))
+```
+```{r Read metadata file}
+
+patient_details <- read.csv(here("NGS/data", "patient_metadata_MASISACHI.csv"), sep = ";",
+                            na.strings = "", stringsAsFactors = FALSE)
+
+patient_details <- patient_details %>% 
+  rename("Grade" = G, "Resection_margin" = R, "Tumour" = T., "Nodes" = N.,
+         "census_event_free" = census_event.free, "DFS" = DFS.,
+         "census_os" = census_OS., "OS" = OS., "Recurrence" = SITE_OF_RECURRENCE) %>% 
+  # mutate(Sample_ID = gsub("(^ID_)(\\d{1}$)", "\\10\\2", .$Sample_ID)) %>% 
+  mutate(Recurrence = gsub(
+    "(^L)(.+.)(D$)", "\\1ocal and Distant\\", .$Recurrence)) %>% 
+  mutate(Recurrence = na_if(Recurrence, "NA")) %>% 
+  mutate(Recurrence = na_if(Recurrence, "-")) %>%
+  mutate(y_axis = c(1)) %>% 
+  mutate(Treatment_type = case_when(Treatment_group == "1" | Treatment_group == "3" | Treatment_group == "4" ~ "Neoadjuvant",
+                                    Treatment_group == "2a" | Treatment_group == "2b" ~ "Adjuvant")) %>% 
+  filter(Histology == "Pass")
+
+patient_details$Grade <- fct_recode(patient_details$Grade, NULL = "GX")
+patient_details$Nodes <- fct_recode(patient_details$Nodes, NULL = "NV")
+```
+```{r Join metadata with mutations file}
+treat_seq_join <- patient_details %>% 
+  select(Sample_ID, Treatment_group, OS, Histology)
+
+
+tile_data_long <- tile_data_long %>% 
+  left_join(treat_seq_join, by = "Sample_ID")
+
+tile_data_long <- tile_data_long %>% 
+  filter(Histology == "Pass") %>% 
+  arrange(-OS) %>% 
+  ungroup() %>% 
+  mutate(Sample_ID = factor(Sample_ID, levels = unique(Sample_ID)))
+
+# set order of Sample_ID based on tile_data_long arrangement
+
+patient_details <- patient_details %>% 
+  mutate(Sample_ID=factor(Sample_ID, 
+                          levels = unique(tile_data_long$Sample_ID))) %>% 
+  arrange(Sample_ID, unique(tile_data_long$Sample_ID))
+```
+```{r Create matrix for Oncoprint}
+
+matrix <-  read.csv(here("NGS/data", "mutations_MASISACHI.csv"), sep = ";",
+                    stringsAsFactors = FALSE, row.names = 1, header = TRUE, 
+                    na.strings = "")
+
+# the order of the matrix MUST be the same order as the metadata,
+# otherwise the annotation will not reorder!!!
+matrix <- matrix %>% 
+  select(one_of(as.character(patient_details$Sample_ID)))
+matrix = as.matrix(matrix)
+
+column_order <- levels(tile_data_long$Sample_ID)
+row_order <- read.csv(here("NGS/data", "row_order_oncoprint.csv"), sep = ";",
+                            na.strings = "", stringsAsFactors = FALSE) %>% 
+  mutate(Pathway = factor(Pathway, levels = c("Pancreatic cancer", 
+                                              "DNA damage repair", "Cell cycle",
+                                              "Other oncogenes")))
+```
+```{r Oncoprint parameters}
+
+alter_fun = list(
+  background = function(x, y, w, h)
+    grid.rect(x, y, w*0.9, h*0.9, gp = gpar(fill = "#CCCCCC", col = NA)),
+  SNV = function(x, y, w, h) grid.rect(x, y, w*0.9, h*0.9,
+                                       gp = gpar(fill = "#d7191c", col = NA)),
+  INDEL = function(x, y, w, h) grid.rect(x, y, w*0.9, h*0.4, 
+                                         gp = gpar(fill = "#2c7bb6",col = NA)), 
+  AMP = function(x, y, w, h) grid.rect(x, y, w*0.9, h*0.4, 
+                                       gp = gpar(fill = "#1a9641", col = NA)))
+
+mut_fills = c("SNV" = "#d7191c", "INDEL" = "#2c7bb6", "AMP" = "#1a9641")  
+
+mut_order = c("SNV", "INDEL", "AMP")
+
+mut_labels = c("SNV", "INDEL", "Amplification")
+```
+```{r Annotation parameters}
+
+cyto_cols = c("#1a9641", "#f03b20", "#404040")
+names(cyto_cols) = na.omit(sort(unique(patient_details$Cytology)))
+
+histo_cols = c("#1a9641")
+names(histo_cols) = sort(unique(patient_details$Histology))
+
+treat_cols = c("#386cb0", "#e7298a", "#7570b3", "#d95f02", "#66a61e")
+names(treat_cols) = c("2a", "2b", "1", "3", "4")
+treat_labels = c("Adjuvant PEXG (Group B1)", "Adjuvant GEM (Group B2)",
+                 "Neoadjuvant PEXG (Group A)",
+                 "Primary PEXG/PEFG (Group C)", "Primary PAXG/AG (Group D)")
+
+grade_cols = c("#bfd3e6", "#8c96c6", "#810f7c")
+names(grade_cols) = na.omit(unique(sort(patient_details$Grade)))
+
+resect_cols = c("#a8ddb5", "#0868ac")
+names(resect_cols) = na.omit(unique(sort(patient_details$Resection_margin)))
+
+tumour_cols = c("#c7e9c0", "#a1d99b", "#74c476", "#238b45", "#00441b")
+names(tumour_cols) = na.omit(unique(sort(patient_details$Tumour)))
+
+nodes_cols = c("#fdbb84", "#ef6548", "#b30000")
+names(nodes_cols) = na.omit(unique(sort(patient_details$Nodes)))
+
+DFS_cols = colorRamp2(c(0, 20, 40, 60), c("#bcbddc", "#807dba", "#54278f", "#3f007d"))
+DFS_cols_names = c("0", "20", "40", "60")
+
+OS_cols = colorRamp2(c(0, 30, 60, 90), c("#9ecae1", "#4292c6", "#08519c", "#08306b"))
+OS_cols_names = c("0", "30", "60", "90")
+
+NPL_ratio_cols = colorRamp2(c(0, 30, 60, 90), c("#d9d9d9", "#969696", "#525252", "#000000"))
+NPL_ratio_cols_names = c("0", "30", "60", "90")
+
+ha_bottom = HeatmapAnnotation(
+  Group = patient_details$Treatment_group,
+  # Histo_Sequencing = patient_details$Histology,
+  Histo_Cyto = patient_details$Cytology,
+  DFS = patient_details$DFS,
+  OS = patient_details$OS,
+  Grade = patient_details$Grade,
+  Margin = patient_details$Resection_margin,
+  Tumour = patient_details$Tumour,
+  Nodes = patient_details$Nodes,
+  show_annotation_name = TRUE,
+  col = list(Group = treat_cols, Histo_Cyto = cyto_cols, 
+             # Histo_Sequencing = histo_cols,
+             DFS = DFS_cols, OS = OS_cols, Grade = grade_cols, Margin = resect_cols,
+             Tumour = tumour_cols, Nodes = nodes_cols),
+  na_col = "#E9E9E9",
+  show_legend = FALSE, gp = gpar(col = "white"),
+  annotation_name_gp = gpar(fontsize = 8), gap = unit(0.5,"mm"))
+
+ha_bottom_short = HeatmapAnnotation(
+  NPL_ratio = patient_details$NPL_ratio,
+  Group = patient_details$Treatment_group,
+  # Histo_Sequencing = patient_details$Histology,
+  Histo_Cyto = patient_details$Cytology,
+  DFS = patient_details$DFS,
+  OS = patient_details$OS,
+  # Grade = patient_details$Grade,
+  # Margin = patient_details$Resection_margin,
+  # Tumour = patient_details$Tumour,
+  # Nodes = patient_details$Nodes,
+  show_annotation_name = TRUE,
+  col = list(NPL_ratio = NPL_ratio_cols,Group = treat_cols, 
+             Histo_Cyto = cyto_cols, 
+             # Histo_Sequencing = histo_cols,
+             DFS = DFS_cols, OS = OS_cols 
+             # Grade = grade_cols, Margin = resect_cols,
+             # Tumour = tumour_cols, Nodes = nodes_cols
+             ),
+  na_col = "#E9E9E9",
+  show_legend = FALSE, gp = gpar(col = "white"),
+  annotation_name_gp = gpar(fontsize = 8), gap = unit(0.5,"mm"))
+
+Annotation_legends <- list(
+  Legend(title = "Somatic events", at = mut_order, labels = mut_labels,
+         legend_gp = gpar(fill = mut_fills), labels_gp = gpar(fontsize = 8),
+         title_gp = gpar(fontsize = 9, fontface = "bold")),
+  Legend(title = "Histo-Cyto \nConcordance", labels = names(cyto_cols), 
+         legend_gp = gpar(fill = cyto_cols), labels_gp = gpar(fontsize = 8),
+         title_gp = gpar(fontsize = 9, fontface = "bold")),
+  # Legend(title = "Hisotlogy sequencing status", labels = names(histo_cols),
+  #        legend_gp = gpar(fill = mut_fills), labels_gp = gpar(fontsize = 8),
+  #        title_gp = gpar(fontsize = 9, fontface = "bold")),
+  Legend(title = "Group of Treatment", labels = treat_labels,
+         legend_gp = gpar(fill = treat_cols), labels_gp = gpar(fontsize = 8),
+         title_gp = gpar(fontsize = 9, fontface = "bold")),
+  Legend(title = "Grade", labels = names(grade_cols), 
+         legend_gp = gpar(fill = grade_cols), labels_gp = gpar(fontsize = 8),
+         title_gp = gpar(fontsize = 9, fontface = "bold")),
+  Legend(title = "Resection \nmargin", labels = names(resect_cols), 
+         legend_gp = gpar(fill = resect_cols), labels_gp = gpar(fontsize = 8),
+         title_gp = gpar(fontsize = 9, fontface = "bold")),
+  Legend(title = "Tumour", labels = names(tumour_cols), 
+         legend_gp = gpar(fill = tumour_cols), labels_gp = gpar(fontsize = 8),
+         title_gp = gpar(fontsize = 9, fontface = "bold")),
+  Legend(title = "Nodes", labels = names(nodes_cols), 
+         legend_gp = gpar(fill = nodes_cols), labels_gp = gpar(fontsize = 8),
+         title_gp = gpar(fontsize = 9, fontface = "bold")),
+  Legend(title = "DFS (months)", col_fun = DFS_cols, at = c(0, 20, 40, 60),
+         labels = DFS_cols_names, labels_gp = gpar(fontsize = 8),
+         title_gp = gpar(fontsize = 9, fontface = "bold"),
+         direction = "horizontal"),
+  Legend(title = "OS (months)", col_fun = OS_cols, at = c(0, 20, 40, 60),
+         labels = OS_cols_names, labels_gp = gpar(fontsize = 8),
+         title_gp = gpar(fontsize = 9, fontface = "bold"),
+         direction = "horizontal")
+)
+
+Annotation_legends_short <- list(
+  Legend(title = "Somatic events", at = mut_order, labels = mut_labels,
+         legend_gp = gpar(fill = mut_fills), labels_gp = gpar(fontsize = 10),
+         title_gp = gpar(fontsize = 11, fontface = "bold")),
+    Legend(title = "Group of Treatment", labels = treat_labels,
+         legend_gp = gpar(fill = treat_cols), labels_gp = gpar(fontsize = 10),
+         title_gp = gpar(fontsize = 11, fontface = "bold")),
+  Legend(title = "Histo-Cyto \nConcordance", labels = names(cyto_cols), 
+         legend_gp = gpar(fill = cyto_cols), labels_gp = gpar(fontsize = 10),
+         title_gp = gpar(fontsize = 11, fontface = "bold")),
+  # Legend(title = "Hisotlogy sequencing status", labels = names(histo_cols),
+  #        legend_gp = gpar(fill = mut_fills), labels_gp = gpar(fontsize = 8),
+  #        title_gp = gpar(fontsize = 9, fontface = "bold")),
+
+  # Legend(title = "Grade", labels = names(grade_cols), 
+  #        legend_gp = gpar(fill = grade_cols), labels_gp = gpar(fontsize = 8),
+  #        title_gp = gpar(fontsize = 9, fontface = "bold")),
+  # Legend(title = "Resection \nmargin", labels = names(resect_cols), 
+  #        legend_gp = gpar(fill = resect_cols), labels_gp = gpar(fontsize = 8),
+  #        title_gp = gpar(fontsize = 9, fontface = "bold")),
+  # Legend(title = "Tumour", labels = names(tumour_cols), 
+  #        legend_gp = gpar(fill = tumour_cols), labels_gp = gpar(fontsize = 8),
+  #        title_gp = gpar(fontsize = 9, fontface = "bold")),
+  # Legend(title = "Nodes", labels = names(nodes_cols), 
+  #        legend_gp = gpar(fill = nodes_cols), labels_gp = gpar(fontsize = 8),
+  #        title_gp = gpar(fontsize = 9, fontface = "bold")),
+  Legend(title = "DFS (months)", col_fun = DFS_cols, at = c(0, 20, 40, 60),
+         labels = DFS_cols_names, labels_gp = gpar(fontsize = 10),
+         title_gp = gpar(fontsize = 11, fontface = "bold"),
+         direction = "horizontal"),
+  Legend(title = "OS (months)", col_fun = OS_cols, at = c(0, 20, 40, 60),
+         labels = OS_cols_names, labels_gp = gpar(fontsize = 10),
+         title_gp = gpar(fontsize = 11, fontface = "bold"),
+         direction = "horizontal"),
+  Legend(title = "Percentage of \ntumor cells", col_fun = NPL_ratio_cols, 
+         at = c(0, 30, 60, 90),
+         labels = NPL_ratio_cols_names, labels_gp = gpar(fontsize = 10),
+         title_gp = gpar(fontsize = 11, fontface = "bold"),
+         direction = "horizontal"))
+
+
+ht <- oncoPrint(matrix,
+                alter_fun = alter_fun,
+                col = mut_fills,
+                show_heatmap_legend = FALSE,
+                bottom_annotation = ha_bottom,
+                column_order = column_order,
+                column_split = patient_details$Treatment_type,
+                column_gap = unit(3, "mm"),
+                row_order = 1:nrow(matrix),
+                row_split = row_order$Pathway,
+                row_gap = unit(1, "mm"),
+                row_title_gp = gpar(fontsize = 10),
+                show_column_names = FALSE) %>% 
+  draw(annotation_legend_list = Annotation_legends,
+       heatmap_legend_side = "bottom", annotation_legend_side = "bottom")
+
+
+ht_short <- oncoPrint(matrix,
+                alter_fun = alter_fun,
+                col = mut_fills,
+                show_heatmap_legend = FALSE,
+                bottom_annotation = ha_bottom_short,
+                column_order = column_order,
+                column_split = patient_details$Treatment_type,
+                column_gap = unit(3, "mm"),
+                row_order = 1:nrow(matrix),
+                row_split = row_order$Pathway,
+                row_gap = unit(1, "mm"),
+                row_title_gp = gpar(fontsize = 10),
+                row_title_rot = 0,
+                show_column_names = FALSE) %>% 
+  draw(annotation_legend_list = Annotation_legends_short, 
+       heatmap_legend_side = "bottom", annotation_legend_side = "bottom")                 
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+```{r Save plot}
+
+pdf(here("NGS/figures", "heatmap_MASISACHI.pdf"), width = 30, height = 15)
+HM <- draw(ht)
+dev.off()
+
+jpeg(here("NGS/figures", "heatmap_MASISACHI.jpeg"), width = 40, height = 25, units = "cm",
+     res = 72, type = "windows")
+HM <- draw(ht)
+dev.off()
+
+pdf(here("NGS/figures", "heatmap_MASISACHI_short.pdf"), width = 30, height = 15)
+HM <- draw(ht_short)
+dev.off()
+
+jpeg(here("NGS/figures", "heatmap_MASISACHI_short.jpeg"), width = 40, height = 25, units = "cm",
+     res = 72, type = "windows")
+HM <- draw(ht_short)
+dev.off()
+```
+```{r Only adjuvant group}
+
+pat_det_adj <- patient_details %>% 
+  filter(Treatment_group == "2a" | Treatment_group == "2b")
+
+tile_data_long_adj <- tile_data_long %>% 
+  filter(Treatment_group == "2a" | Treatment_group == "2b") %>% 
+  mutate(Sample_ID = factor(Sample_ID, levels = unique(Sample_ID)))
+
+matrix_adj <- read.csv(here("NGS/data", "mutations_MASISACHI.csv"), sep = ";",
+                    stringsAsFactors = FALSE, row.names = 1, header = TRUE, 
+                    na.strings = "")
+matrix_adj <- matrix_adj %>% 
+  select(one_of(as.character(pat_det_adj$Sample_ID)))
+matrix_adj = as.matrix(matrix_adj)
+
+column_order_adj <- levels(tile_data_long_adj$Sample_ID)
+row_order_adj <- read.csv(here("NGS/data", "row_order_oncoprint.csv"), sep = ";",
+                            na.strings = "", stringsAsFactors = FALSE) %>% 
+  mutate(Pathway = factor(Pathway, levels = c("Pancreatic cancer", 
+                                              "DNA damage repair", "Cell cycle",
+                                              "Other oncogenes")))  
+
+treat_cols_adj = c("#d95f02", "#7570b3")
+names(treat_cols_adj) = c("2a", "2b")
+treat_adj_labels = c("Adjuvant PEXG", "Adjuvant GEM")
+
+ha_bottom_adj = HeatmapAnnotation(
+  Group = pat_det_adj$Treatment_group,
+  # Histo_Sequencing = patient_details$Histology,
+  Histo_Cyto = pat_det_adj$Cytology,
+  DFS = pat_det_adj$DFS,
+  OS = pat_det_adj$OS,
+  Grade = pat_det_adj$Grade,
+  Margin = pat_det_adj$Resection_margin,
+  Tumour = pat_det_adj$Tumour,
+  Nodes = pat_det_adj$Nodes,
+  show_annotation_name = TRUE,
+  col = list(
+    Group = treat_cols_adj,
+    Histo_Cyto = cyto_cols,
+    # Histo_Sequencing = histo_cols,
+             DFS = DFS_cols, OS = OS_cols, Grade = grade_cols, Margin = resect_cols,
+             Tumour = tumour_cols, Nodes = nodes_cols),
+  na_col = "#E9E9E9",
+  show_legend = FALSE, gp = gpar(col = "white"),
+  annotation_name_gp = gpar(fontsize = 8), gap = unit(0.5,"mm"))
+
+
+
+Annotation_legends_adj <- list(
+  Legend(title = "Somatic events", at = mut_order, labels = mut_labels,
+         legend_gp = gpar(fill = mut_fills), labels_gp = gpar(fontsize = 8),
+         title_gp = gpar(fontsize = 9, fontface = "bold")),
+  Legend(title = "Histo-Cyto \nConcordance", labels = names(cyto_cols), 
+         legend_gp = gpar(fill = cyto_cols), labels_gp = gpar(fontsize = 8),
+         title_gp = gpar(fontsize = 9, fontface = "bold")),
+  # Legend(title = "Hisotlogy sequencing status", labels = names(histo_cols),
+  #        legend_gp = gpar(fill = mut_fills), labels_gp = gpar(fontsize = 8),
+  #        title_gp = gpar(fontsize = 9, fontface = "bold")),
+  Legend(title = "Group of Treatment", labels = treat_adj_labels,
+         legend_gp = gpar(fill = treat_cols_adj), labels_gp = gpar(fontsize = 8),
+         title_gp = gpar(fontsize = 9, fontface = "bold")),
+  Legend(title = "Grade", labels = names(grade_cols), 
+         legend_gp = gpar(fill = grade_cols), labels_gp = gpar(fontsize = 8),
+         title_gp = gpar(fontsize = 9, fontface = "bold")),
+  Legend(title = "Resection \nmargin", labels = names(resect_cols), 
+         legend_gp = gpar(fill = resect_cols), labels_gp = gpar(fontsize = 8),
+         title_gp = gpar(fontsize = 9, fontface = "bold")),
+  Legend(title = "Tumour", labels = names(tumour_cols), 
+         legend_gp = gpar(fill = tumour_cols), labels_gp = gpar(fontsize = 8),
+         title_gp = gpar(fontsize = 9, fontface = "bold")),
+  Legend(title = "Nodes", labels = names(nodes_cols), 
+         legend_gp = gpar(fill = nodes_cols), labels_gp = gpar(fontsize = 8),
+         title_gp = gpar(fontsize = 9, fontface = "bold")),
+  Legend(title = "DFS", col_fun = DFS_cols, at = c(0, 20, 40, 60),
+         labels = DFS_cols_names, labels_gp = gpar(fontsize = 8),
+         title_gp = gpar(fontsize = 9, fontface = "bold"),
+         direction = "horizontal"),
+  Legend(title = "OS", col_fun = OS_cols, at = c(0, 20, 40, 60),
+         labels = OS_cols_names, labels_gp = gpar(fontsize = 8),
+         title_gp = gpar(fontsize = 9, fontface = "bold"),
+         direction = "horizontal")
+)
+
+
+ht_adj <- oncoPrint(matrix_adj,
+                alter_fun = alter_fun,
+                col = mut_fills,
+                show_heatmap_legend = FALSE,
+                bottom_annotation = ha_bottom_adj,
+                column_order = column_order_adj,
+                # column_split = patient_details$Treatment_type,
+                # column_gap = unit(3, "mm"),
+                row_order = 1:nrow(matrix_adj),
+                row_split = row_order_adj$Pathway,
+                row_gap = unit(1, "mm"),
+                row_title_gp = gpar(fontsize = 10),
+                show_column_names = TRUE,
+                remove_empty_rows = TRUE) %>% 
+  draw(annotation_legend_list = Annotation_legends_adj)
+
+pdf(here("NGS/figures", "heatmap_MASISACHI_adj.pdf"), width = 30, height = 15)
+HM <- draw(ht_adj)
+dev.off()
+
+jpeg(here("NGS/figures", "heatmap_MASISACHI_adj.jpeg"), width = 55, height = 30, units = "cm",
+     res = 72, type = "windows")
+HM <- draw(ht_adj)
+dev.off()
+
+```
+```{r Only neoadjuvant group,}
+
+pat_det_neo <- patient_details %>% 
+  filter(Treatment_group == "1" | Treatment_group == "3" | Treatment_group == "4")
+
+tile_data_long_neo <- tile_data_long %>% 
+  filter(Treatment_group == "1" | Treatment_group == "3" | Treatment_group == "4") %>% 
+  mutate(Sample_ID = factor(Sample_ID, levels = unique(Sample_ID)))
+
+matrix_neo <- read.csv(here("NGS/data", "mutations_MASISACHI.csv"), sep = ";",
+                    stringsAsFactors = FALSE, row.names = 1, header = TRUE, 
+                    na.strings = "")
+matrix_neo <- matrix_neo %>% 
+  select(one_of(as.character(pat_det_neo$Sample_ID)))
+matrix_neo = as.matrix(matrix_neo)
+
+column_order_neo <- levels(tile_data_long_neo$Sample_ID)
+row_order_neo <- read.csv(here("NGS/data", "row_order_oncoprint.csv"), sep = ";",
+                            na.strings = "", stringsAsFactors = FALSE) %>% 
+  mutate(Pathway = factor(Pathway, levels = c("Pancreatic cancer", 
+                                              "DNA damage repair", "Cell cycle",
+                                              "Other oncogenes")))  
+
+treat_cols_neo = c("#1b9e77", "#fb9a99", "#a6cee3")
+names(treat_cols_neo) = c("1", "3", "4")
+treat_neo_labels = c("Neoadjuvant PEXG", "Neoadjuvant PEXG/PEFG", 
+                     "Neoadjuvant PAXG/AG")
+
+ha_bottom_neo = HeatmapAnnotation(
+  Group = pat_det_neo$Treatment_group,
+  # Histo_Sequencing = patient_details$Histology,
+  Histo_Cyto = pat_det_neo$Cytology,
+  DFS = pat_det_neo$DFS,
+  OS = pat_det_neo$OS,
+  Grade = pat_det_neo$Grade,
+  Margin = pat_det_neo$Resection_margin,
+  Tumour = pat_det_neo$Tumour,
+  Nodes = pat_det_neo$Nodes,
+  show_annotation_name = TRUE,
+  col = list(
+    Group = treat_cols_neo,
+    Histo_Cyto = cyto_cols,
+    # Histo_Sequencing = histo_cols,
+             DFS = DFS_cols, OS = OS_cols, Grade = grade_cols, Margin = resect_cols,
+             Tumour = tumour_cols, Nodes = nodes_cols),
+  na_col = "#E9E9E9",
+  show_legend = FALSE, gp = gpar(col = "white"),
+  annotation_name_gp = gpar(fontsize = 8), gap = unit(0.5,"mm"))
+
+Annotation_legends_neo <- list(
+  Legend(title = "Somatic events", at = mut_order, labels = mut_labels,
+         legend_gp = gpar(fill = mut_fills), labels_gp = gpar(fontsize = 8),
+         title_gp = gpar(fontsize = 9, fontface = "bold")),
+  Legend(title = "Histo-Cyto \nConcordance", labels = names(cyto_cols), 
+         legend_gp = gpar(fill = cyto_cols), labels_gp = gpar(fontsize = 8),
+         title_gp = gpar(fontsize = 9, fontface = "bold")),
+  # Legend(title = "Hisotlogy sequencing status", labels = names(histo_cols),
+  #        legend_gp = gpar(fill = mut_fills), labels_gp = gpar(fontsize = 8),
+  #        title_gp = gpar(fontsize = 9, fontface = "bold")),
+  Legend(title = "Group of Treatment", labels = treat_neo_labels,
+         legend_gp = gpar(fill = treat_cols_neo), labels_gp = gpar(fontsize = 8),
+         title_gp = gpar(fontsize = 9, fontface = "bold")),
+  Legend(title = "Grade", labels = names(grade_cols), 
+         legend_gp = gpar(fill = grade_cols), labels_gp = gpar(fontsize = 8),
+         title_gp = gpar(fontsize = 9, fontface = "bold")),
+  Legend(title = "Resection \nmargin", labels = names(resect_cols), 
+         legend_gp = gpar(fill = resect_cols), labels_gp = gpar(fontsize = 8),
+         title_gp = gpar(fontsize = 9, fontface = "bold")),
+  Legend(title = "Tumour", labels = names(tumour_cols), 
+         legend_gp = gpar(fill = tumour_cols), labels_gp = gpar(fontsize = 8),
+         title_gp = gpar(fontsize = 9, fontface = "bold")),
+  Legend(title = "Nodes", labels = names(nodes_cols), 
+         legend_gp = gpar(fill = nodes_cols), labels_gp = gpar(fontsize = 8),
+         title_gp = gpar(fontsize = 9, fontface = "bold")),
+  Legend(title = "DFS", col_fun = DFS_cols, at = c(0, 20, 40, 60),
+         labels = DFS_cols_names, labels_gp = gpar(fontsize = 8),
+         title_gp = gpar(fontsize = 9, fontface = "bold"),
+         direction = "horizontal"),
+  Legend(title = "OS", col_fun = OS_cols, at = c(0, 20, 40, 60),
+         labels = OS_cols_names, labels_gp = gpar(fontsize = 8),
+         title_gp = gpar(fontsize = 9, fontface = "bold"),
+         direction = "horizontal")
+)
+
+
+ht_neo <- oncoPrint(matrix_neo,
+                alter_fun = alter_fun,
+                col = mut_fills,
+                show_heatmap_legend = FALSE,
+                bottom_annotation = ha_bottom_neo,
+                column_order = column_order_neo,
+                # column_split = patient_details$Treatment_type,
+                # column_gap = unit(3, "mm"),
+                row_order = 1:nrow(matrix_adj),
+                row_split = row_order_adj$Pathway,
+                row_gap = unit(1, "mm"),
+                row_title_gp = gpar(fontsize = 10),
+                show_column_names = TRUE,
+                remove_empty_rows = TRUE) %>% 
+    draw(annotation_legend_list = Annotation_legends_neo)
+
+pdf(here("NGS/figures", "heatmap_MASISACHI_neo.pdf"), width = 30, height = 15)
+HM <- draw(ht_neo)
+dev.off()
+
+jpeg(here("NGS/figures", "heatmap_MASISACHI_neo.jpeg"), width = 55, height = 30, units = "cm",
+     res = 72, type = "windows")
+HM <- draw(ht_neo)
+dev.off()
+```
+```{r Tentativo per BRCAness survival}
+fit <- survfit(Surv(OS, census_os) ~ BRCAness, data= patient_details)
+
+plot <- ggsurvplot(fit, 
+           pval = TRUE,
+           risk.table = TRUE,
+           risk.table.height = 0.3)
+```
+

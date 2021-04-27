@@ -1,0 +1,924 @@
+---
+title: "KRAS_MASISACHI"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## KRAS mutation frequency in MASISACHI cohort
+
+Evaluation of KRAS mutation frequency and tumor purity in MASISACHi cohort
+```{r Library, message=FALSE, warning=FALSE}
+library("tidyverse")
+library("here")
+library("cowplot")
+library("RColorBrewer")
+library("grid") 
+library("circlize")
+library("survival")
+library("survminer")
+```
+
+```{r pressure, echo=FALSE}
+KRAS_df <- read.csv(here("NGS/data/", "KRAS_MASISACHI.csv"), stringsAsFactors = FALSE,
+                 sep = ";") %>% 
+  filter(Allele_frequency != "NV") %>% 
+  mutate(Allele_frequency = as.numeric(Allele_frequency))
+
+pat_det <- read.csv(here("NGS/data/", "patient_metadata_MASISACHI.csv"),
+                    stringsAsFactors = FALSE, sep = ";") %>% 
+  mutate(Sample_ID = factor(Sample_ID, 
+                          levels = unique(KRAS_df$Sample_ID)),
+         y_axis = c(1)) 
+
+KRAS_det_join <- KRAS_df %>% 
+  left_join(pat_det, by = "Sample_ID")
+
+KRAS_det_join <- KRAS_det_join %>% 
+  arrange(Allele_frequency, NPL_ratio, OS.) %>% 
+  mutate(Sample_ID = factor(Sample_ID, levels = unique(Sample_ID)),
+         AA_change = factor(AA_change, levels = unique(AA_change)),
+         All_freq_class = case_when(Allele_frequency > 10 ~ ">10",
+                                    Allele_frequency < 10 ~ "<10"))
+
+AA_palette <- c(" " = "white", "G12D" =  "#33a02c", "G12V" = "#e31a1c",
+                "G12R" = "#1f78b4", "Q61L" = "#fb9a99", "G12C" = "#fdbf6f",
+                "Q61H" = "#a6cee3", "Q61R" = "#b2df8a")
+
+# fit <- survfit(formula = Surv(OS., census_OS.) ~ All_freq_class,
+#                                data = KRAS_det_join)
+# ggsurvplot(fit,
+#            pval = TRUE,
+#            risk.table = TRUE,
+#            color = "strata",
+# 
+#            surv.median.line = "hv", # Specify median survival
+#            linetype = "strata",
+#            risk.table.height = 0.3,
+#            tables.y.text = FALSE,
+#            xlab = "Months",
+#            ggtheme = theme_bw())
+
+NPL_pur_adj <- KRAS_df %>% 
+  filter(Treament_group == "2a" | Treament_group == "2b") %>%  
+  arrange(NPL_ratio) %>% 
+  mutate(Sample_ID = factor(Sample_ID, levels = unique(Sample_ID))) %>% 
+  ggplot() +
+  geom_bar(aes(x = Sample_ID, y = NPL_ratio, fill = Treament_group), 
+           stat = "identity") +
+  theme_minimal() +
+  theme(axis.text.x=element_blank(),
+        axis.ticks = element_blank(),
+        axis.title.x=element_blank(),
+        plot.title = element_text(hjust = 0.5, size = 20)) +
+  labs(y = "Tumor purity (%)", title = "Adjuvant") +
+  ylim(0, 100) +
+  scale_fill_discrete(labels = c("Adjuvant PEXG", "Adjuvant GEM"))
+
+
+NPL_pur_neo <-  KRAS_df %>% 
+  filter(Treament_group == "1" | Treament_group == "3" | Treament_group == "4") %>%  
+  arrange(NPL_ratio) %>% 
+  mutate(Sample_ID = factor(Sample_ID, levels = unique(Sample_ID))) %>% 
+  ggplot() +
+  geom_bar(aes(x = Sample_ID, y = NPL_ratio, fill = Treament_group), 
+           stat = "identity") +
+  theme_minimal() +
+  theme(axis.text.x=element_blank(),
+        axis.ticks = element_blank(),
+        axis.title.x=element_blank(),
+        plot.title = element_text(hjust = 0.5, size = 20)) +
+  labs(y = "Tumor purity (%)", title = "Neoadjuvant") +
+  ylim(0, 100) +
+  scale_fill_discrete(labels = c("Neoadjuvant PEXG", "Neoadjuvant PEXG/PEFG",
+                                 "Neoadjuvant PAXG/AG"))
+
+NPL_grid <- plot_grid(NPL_pur_adj, NPL_pur_neo, ncol = 2, nrow = 1, rel_widths = c(0.4, 0.6))
+
+pdf(here("NGS/figures", "NPL_grid.pdf"), width = 30, height = 15)
+MG <- plot(NPL_grid)
+dev.off()
+
+jpeg(here("NGS/figures", "NPL_grid.jpeg"), width = 60, height = 15, units = "cm",
+     res = 72, type = "windows")
+MG <- plot(NPL_grid)
+dev.off()
+
+mut <- KRAS_det_join %>% 
+  ggplot () + 
+  geom_bar(aes(x = Sample_ID, y = Allele_frequency, fill = AA_change),
+           stat = "identity") +
+    theme_minimal() +
+      theme(axis.text.x=element_blank(),
+            axis.text.y = element_blank(),
+            axis.ticks.y.left = element_blank(),
+            panel.grid.major = element_blank(),
+            axis.ticks = element_blank(),
+            legend.position = "right",
+            legend.key = element_blank(),
+            legend.direction = "horizontal",
+            legend.title = element_text(hjust = 0.5),
+            legend.key.width = unit(1.5, "cm"),
+            legend.text = element_text(margin = margin(r = 0.2, unit = 'cm'),
+                                       hjust = 0.5),
+            legend.spacing.x = unit(0.05, 'cm'),
+            plot.margin = unit(c(-0.2, 0, 0, -0.2), "cm")) +
+      guides(fill=guide_legend(nrow = 1, label.position = "top",
+                               title.position = "top")) +
+        labs(x = element_blank(), y = element_blank(),
+           fill = element_text("Aminoacid change")) + 
+  scale_fill_manual(values = AA_palette)
+
+mut_leg <- get_legend(mut)
+mut_no_leg <- mut +
+  theme(legend.position = "none",
+        axis.text.y = element_blank())
+
+```
+```{r}
+group_2 <- KRAS_det_join %>% 
+  filter(Treatment_group == "2a" | Treatment_group == "2b") %>% 
+  ggplot () + 
+  geom_bar(aes(x = Sample_ID, y = Allele_frequency, fill = AA_change),
+           stat = "identity") +
+    theme_minimal() +
+      theme(axis.text.x=element_blank(),
+            # axis.text.y = element_blank(),
+            # axis.ticks.y.left = element_blank(),
+            panel.grid.major = element_blank(),
+            axis.ticks = element_blank(),
+            legend.position = "right",
+            # legend.position = "right",
+            # legend.key = element_blank(),
+            # legend.direction = "horizontal",
+            # legend.title = element_text(hjust = 0.5),
+            # legend.key.width = unit(1.5, "cm"),
+            # legend.text = element_text(margin = margin(r = 0.2, unit = 'cm'),
+            #                            hjust = 0.5),
+            # legend.spacing.x = unit(0.05, 'cm'),
+            plot.margin = unit(c(-0.2, 0, 0, -0.2), "cm")) +
+      guides(fill=guide_legend(nrow = 1, label.position = "top",
+                               title.position = "top")) +
+        labs(x = element_blank(), y = element_blank(),
+           fill = element_text("Aminoacid change")) +
+  scale_fill_manual(values = AA_palette) +
+  ylim(0, 100)
+
+group_2_leg <- get_legend(group_2)
+group_2_no_leg <- group_2 +
+  theme(legend.position = "none")
+```
+```{r}
+group_1 <- KRAS_det_join %>% 
+  filter(Treatment_group == "1") %>% 
+  ggplot () + 
+  geom_bar(aes(x = Sample_ID, y = Allele_frequency, fill = AA_change),
+           stat = "identity") +
+    theme_minimal() +
+      theme(axis.text.x=element_blank(),
+            # axis.text.y = element_blank(),
+            # axis.ticks.y.left = element_blank(),
+            panel.grid.major = element_blank(),
+            axis.ticks = element_blank(),
+            legend.position = "right",
+            # legend.position = "right",
+            # legend.key = element_blank(),
+            # legend.direction = "horizontal",
+            # legend.title = element_text(hjust = 0.5),
+            # legend.key.width = unit(1.5, "cm"),
+            # legend.text = element_text(margin = margin(r = 0.2, unit = 'cm'),
+            #                            hjust = 0.5),
+            # legend.spacing.x = unit(0.05, 'cm'),
+            plot.margin = unit(c(-0.2, 0, 0, -0.2), "cm")) +
+      guides(fill=guide_legend(nrow = 1, label.position = "top",
+                               title.position = "top")) +
+        labs(x = element_blank(), y = element_blank(),
+           fill = element_text("Aminoacid change")) +
+  scale_fill_manual(values = AA_palette) +
+  ylim(0, 100)
+
+group_1_leg <- get_legend(group_1)
+group_1_no_leg <- group_1 +
+  theme(legend.position = "none")
+```
+```{r}
+group_3 <- KRAS_det_join %>% 
+  filter(Treatment_group == "3") %>% 
+  ggplot () + 
+  geom_bar(aes(x = Sample_ID, y = Allele_frequency, fill = AA_change),
+           stat = "identity") +
+    theme_minimal() +
+      theme(axis.text.x=element_blank(),
+            # axis.text.y = element_blank(),
+            # axis.ticks.y.left = element_blank(),
+            panel.grid.major = element_blank(),
+            axis.ticks = element_blank(),
+            legend.position = "none",
+            # legend.position = "right",
+            # legend.key = element_blank(),
+            # legend.direction = "horizontal",
+            # legend.title = element_text(hjust = 0.5),
+            # legend.key.width = unit(1.5, "cm"),
+            # legend.text = element_text(margin = margin(r = 0.2, unit = 'cm'),
+            #                            hjust = 0.5),
+            # legend.spacing.x = unit(0.05, 'cm'),
+            plot.margin = unit(c(-0.2, 0, 0, -0.2), "cm")) +
+      guides(fill=guide_legend(nrow = 1, label.position = "top",
+                               title.position = "top")) +
+        labs(x = element_blank(), y = element_blank(),
+           fill = element_text("Aminoacid change")) +
+  scale_fill_manual(values = AA_palette)+
+  ylim(0, 100)
+
+group_3_leg <- get_legend(group_3)
+group_3_no_leg <- group_3 +
+  theme(legend.position = "none")
+```
+```{r}
+group_4 <- KRAS_det_join %>% 
+  filter(Treatment_group == "4") %>% 
+  ggplot () + 
+  geom_bar(aes(x = Sample_ID, y = Allele_frequency, fill = AA_change),
+           stat = "identity") +
+    theme_minimal() +
+      theme(axis.text.x=element_blank(),
+            # axis.text.y = element_blank(),
+            # axis.ticks.y.left = element_blank(),
+            panel.grid.major = element_blank(),
+            axis.ticks = element_blank(),
+            legend.position = "bottom",
+            legend.key = element_blank(),
+            legend.direction = "horizontal",
+            legend.title = element_text(hjust = 0.5),
+            legend.key.width = unit(1.5, "cm"),
+            legend.text = element_text(margin = margin(r = 0.2, unit = 'cm'),
+                                       hjust = 0.5),
+            legend.spacing.x = unit(0.05, 'cm'),
+            plot.margin = unit(c(-0.2, 0, 0, -0.2), "cm")) +
+      guides(fill=guide_legend(nrow = 1, label.position = "top",
+                               title.position = "top")) +
+        labs(x = element_blank(), y = element_blank(),
+           fill = element_text("Aminoacid change")) +
+  scale_fill_manual(values = AA_palette) +
+  ylim(0, 100)
+
+group_4_leg <- get_legend(group_4)
+group_4_no_leg <- group_4 +
+  theme(legend.position = "none")
+```
+
+```{r}
+
+OS_group_1 <- KRAS_det_join %>% 
+  filter(Treatment_group == "1") %>%
+  ggplot(aes(x = Sample_ID, y = y_axis, fill = OS.)) +
+  geom_tile(width = 0.9, height = 0.9) +
+  theme_minimal() +
+      theme(axis.text.x=element_blank(),
+            # axis.text.y = element_blank(),
+            panel.grid.major = element_blank()) +
+            # axis.ticks = element_blank()) +
+            # legend.position = "right",
+            # legend.key = element_blank(),
+            # legend.direction = "horizontal",
+            # legend.title = element_text(hjust = 0.5),
+            # legend.key.width = unit(1.5, "cm"),
+            # legend.text = element_text(margin = margin(r = 0.2, unit = 'cm'),
+            #                            hjust = 0.5),
+            # legend.spacing.x = unit(0.05, 'cm'),
+      #       plot.margin = unit(c(-0.2, 0, 0, -0.2), "cm")) +
+      # guides(fill=guide_legend(nrow = 1, label.position = "top",
+      #                          title.position = "top")) +
+      scale_fill_distiller(name = "OS \n(months)", direction = 1,
+                           na.value = "grey80", palette = "Greys") +
+      labs(x = element_blank(), y = element_blank())
+
+OS_group_1_leg <- get_legend(OS_group_1)
+OS_group_1_no_leg <- OS_group_1 +
+  theme(legend.position = "none")
+
+OS_group_2 <- KRAS_det_join %>% 
+  filter(Treatment_group == "2a" | Treatment_group == "2b") %>%
+  ggplot(aes(x = Sample_ID, y = y_axis, fill = OS.)) +
+  geom_tile(width = 0.9, height = 0.9) +
+  theme_minimal() +
+      theme(axis.text.x=element_blank(),
+            # axis.text.y = element_blank(),
+            panel.grid.major = element_blank()) +
+            # axis.ticks = element_blank()) +
+            # legend.position = "right",
+            # legend.key = element_blank(),
+            # legend.direction = "horizontal",
+            # legend.title = element_text(hjust = 0.5),
+            # legend.key.width = unit(1.5, "cm"),
+            # legend.text = element_text(margin = margin(r = 0.2, unit = 'cm'),
+            #                            hjust = 0.5),
+            # legend.spacing.x = unit(0.05, 'cm'),
+      #       plot.margin = unit(c(-0.2, 0, 0, -0.2), "cm")) +
+      # guides(fill=guide_legend(nrow = 1, label.position = "top",
+      #                          title.position = "top")) +
+      scale_fill_distiller(name = "OS \n(months)", direction = 1,
+                           na.value = "grey80", palette = "Greys") +
+      labs(x = element_blank(), y = element_blank())
+
+
+OS_group_2_leg <- get_legend(OS_group_2)
+OS_group_2_no_leg <- OS_group_2 +
+  theme(legend.position = "none")
+
+OS_group_3 <- KRAS_det_join %>% 
+  filter(Treatment_group == "3") %>%
+  ggplot(aes(x = Sample_ID, y = y_axis, fill = OS.)) +
+  geom_tile(width = 0.9, height = 0.9) +
+  theme_minimal() +
+      theme(axis.text.x=element_blank(),
+            # axis.text.y = element_blank(),
+            panel.grid.major = element_blank()) +
+            # axis.ticks = element_blank()) +
+            # legend.position = "right",
+            # legend.key = element_blank(),
+            # legend.direction = "horizontal",
+            # legend.title = element_text(hjust = 0.5),
+            # legend.key.width = unit(1.5, "cm"),
+            # legend.text = element_text(margin = margin(r = 0.2, unit = 'cm'),
+            #                            hjust = 0.5),
+            # legend.spacing.x = unit(0.05, 'cm'),
+      #       plot.margin = unit(c(-0.2, 0, 0, -0.2), "cm")) +
+      # guides(fill=guide_legend(nrow = 1, label.position = "top",
+      #                          title.position = "top")) +
+      scale_fill_distiller(name = "OS \n(months)", direction = 1,
+                           na.value = "grey80", palette = "Greys") +
+      labs(x = element_blank(), y = element_blank())
+
+
+OS_group_3_leg <- get_legend(OS_group_3)
+OS_group_3_no_leg <- OS_group_3 +
+  theme(legend.position = "none")
+
+OS_group_4 <- KRAS_det_join %>% 
+  filter(Treatment_group == "4") %>%
+  ggplot(aes(x = Sample_ID, y = y_axis, fill = OS.)) +
+  geom_tile(width = 0.9, height = 0.9) +
+  theme_minimal() +
+      theme(axis.text.x=element_blank(),
+            # axis.text.y = element_blank(),
+            panel.grid.major = element_blank()) +
+            # axis.ticks = element_blank()) +
+            # legend.position = "right",
+            # legend.key = element_blank(),
+            # legend.direction = "horizontal",
+            # legend.title = element_text(hjust = 0.5),
+            # legend.key.width = unit(1.5, "cm"),
+            # legend.text = element_text(margin = margin(r = 0.2, unit = 'cm'),
+            #                            hjust = 0.5),
+            # legend.spacing.x = unit(0.05, 'cm'),
+      #       plot.margin = unit(c(-0.2, 0, 0, -0.2), "cm")) +
+      # guides(fill=guide_legend(nrow = 1, label.position = "top",
+      #                          title.position = "top")) +
+      scale_fill_distiller(name = "OS \n(months)", direction = 1,
+                           na.value = "grey80", palette = "Greys") +
+      labs(x = element_blank(), y = element_blank())
+
+OS_group_4_leg <- get_legend(OS_group_4)
+OS_group_4_no_leg <- OS_group_4 +
+  theme(legend.position = "none")
+
+
+# plot_grid(group_2_no_leg, group_1_no_leg, group_3_no_leg,group_4_no_leg, 
+#           OS_group_2_no_leg, OS_group_1_no_leg, OS_group_3_no_leg, OS_group_4_no_leg,
+#           ncol = 4, align = "v", rel_heights = c(3, 1))
+```
+
+```{r tile plot }
+
+tum_purity_group_1 <- KRAS_det_join %>% 
+    filter(Treatment_group == "1") %>%
+  ggplot(aes(x = Sample_ID, y = y_axis, fill = NPL_ratio)) +
+  geom_tile(width = 0.9, height = 0.9) +
+    theme_minimal() +
+      theme(axis.text.x=element_blank(),
+            # axis.text.y = element_blank(),
+            panel.grid.major = element_blank()) +
+      #       axis.ticks = element_blank(),
+      #       legend.position = "right",
+      #       legend.key = element_blank(),
+      #       legend.direction = "horizontal",
+      #       legend.title = element_text(hjust = 0.5),
+      #       legend.key.width = unit(1.5, "cm"),
+      #       legend.text = element_text(margin = margin(r = 0.2, unit = 'cm'),
+      #                                  hjust = 0.5),
+      #       legend.spacing.x = unit(0.05, 'cm'),
+      #       plot.margin = unit(c(-0.2, 0, 0, -0.2), "cm")) +
+      # guides(fill=guide_legend(nrow = 1, label.position = "top",
+      #                          title.position = "top")) +
+      scale_fill_distiller(name = "Tumor purity (%)", direction = 1,
+                           na.value = "grey80", palette = "Greys") +
+      labs(x = element_blank(), y = element_blank())
+
+tum_purity_group_1_leg <- get_legend(tum_purity_group_1)
+tum_purity_group_1_no_leg <- tum_purity_group_1 +
+  theme(legend.position = "none")
+
+tum_purity_group_2 <- KRAS_det_join %>% 
+  filter(Treatment_group == "2a" | Treatment_group == "2b") %>%
+  ggplot(aes(x = Sample_ID, y = y_axis, fill = NPL_ratio)) +
+  geom_tile(width = 0.9, height = 0.9) +
+    theme_minimal() +
+      theme(axis.text.x=element_blank(),
+            # axis.text.y = element_blank(),
+            panel.grid.major = element_blank()) +
+      #       axis.ticks = element_blank(),
+      #       legend.position = "right",
+      #       legend.key = element_blank(),
+      #       legend.direction = "horizontal",
+      #       legend.title = element_text(hjust = 0.5),
+      #       legend.key.width = unit(1.5, "cm"),
+      #       legend.text = element_text(margin = margin(r = 0.2, unit = 'cm'),
+      #                                  hjust = 0.5),
+      #       legend.spacing.x = unit(0.05, 'cm'),
+      #       plot.margin = unit(c(-0.2, 0, 0, -0.2), "cm")) +
+      # guides(fill=guide_legend(nrow = 1, label.position = "top",
+      #                          title.position = "top")) +
+      scale_fill_distiller(name = "Tumor purity (%)", direction = 1,
+                           na.value = "grey80", palette = "Greys") +
+      labs(x = element_blank(), y = element_blank())
+
+tum_purity_group_2_leg <- get_legend(tum_purity_group_2)
+tum_purity_group_2_no_leg <- tum_purity_group_2 +
+  theme(legend.position = "none")
+
+tum_purity_group_3 <- KRAS_det_join %>% 
+  filter(Treatment_group == "3") %>%
+  ggplot(aes(x = Sample_ID, y = y_axis, fill = NPL_ratio)) +
+  geom_tile(width = 0.9, height = 0.9) +
+    theme_minimal() +
+      theme(axis.text.x=element_blank(),
+            # axis.text.y = element_blank(),
+            panel.grid.major = element_blank()) +
+      #       axis.ticks = element_blank(),
+      #       legend.position = "right",
+      #       legend.key = element_blank(),
+      #       legend.direction = "horizontal",
+      #       legend.title = element_text(hjust = 0.5),
+      #       legend.key.width = unit(1.5, "cm"),
+      #       legend.text = element_text(margin = margin(r = 0.2, unit = 'cm'),
+      #                                  hjust = 0.5),
+      #       legend.spacing.x = unit(0.05, 'cm'),
+      #       plot.margin = unit(c(-0.2, 0, 0, -0.2), "cm")) +
+      # guides(fill=guide_legend(nrow = 1, label.position = "top",
+      #                          title.position = "top")) +
+      scale_fill_distiller(name = "Tumor purity (%)", direction = 1,
+                           na.value = "grey80", palette = "Greys") +
+      labs(x = element_blank(), y = element_blank())
+
+tum_purity_group_3_leg <- get_legend(tum_purity_group_3)
+tum_purity_group_3_no_leg <- tum_purity_group_3 +
+  theme(legend.position = "none")
+
+tum_purity_group_4 <- KRAS_det_join %>%
+  filter(Treatment_group == "4") %>%
+  ggplot(aes(x = Sample_ID, y = y_axis, fill = NPL_ratio)) +
+  geom_tile(width = 0.9, height = 0.9) +
+    theme_minimal() +
+      theme(axis.text.x=element_blank(),
+            # axis.text.y = element_blank(),
+            panel.grid.major = element_blank(),
+      #       axis.ticks = element_blank(),
+      #       legend.position = "right",
+      #       legend.key = element_blank(),
+            legend.direction = "horizontal") +
+      #       legend.title = element_text(hjust = 0.5),
+      #       legend.key.width = unit(1.5, "cm"),
+      #       legend.text = element_text(margin = margin(r = 0.2, unit = 'cm'),
+      #                                  hjust = 0.5),
+      #       legend.spacing.x = unit(0.05, 'cm'),
+      #       plot.margin = unit(c(-0.2, 0, 0, -0.2), "cm")) +
+      # guides(fill=guide_legend(nrow = 1, label.position = "top",
+      #                          title.position = "top")) +
+      scale_fill_distiller(name = "Tumor purity (%)", direction = 1,
+                           na.value = "grey80", palette = "Greys") +
+      labs(x = element_blank(), y = element_blank())
+
+tum_purity_group_4_leg <- get_legend(tum_purity_group_4)
+tum_purity_group_4_no_leg <- tum_purity_group_4 +
+  theme(legend.position = "none")
+
+mut_grid <- plot_grid(group_2_no_leg, group_1_no_leg, group_3_no_leg,group_4_no_leg, 
+          tum_purity_group_2_no_leg, tum_purity_group_1_no_leg, 
+          tum_purity_group_3_no_leg, tum_purity_group_4_no_leg, 
+          # OS_group_2_no_leg, OS_group_1_no_leg, OS_group_3_no_leg, 
+          # OS_group_4_no_leg, 
+          ncol = 4, align = "v", rel_heights = c(4, 0.5, 0.5))
+
+
+```
+```{r}
+pdf(here("NGS/figures", "mut_grid.pdf"), width = 30, height = 15)
+MG <- plot(mut_grid)
+dev.off()
+
+jpeg(here("NGS/figures", "mut_grid.jpeg"), width = 60, height = 15, units = "cm",
+     res = 72, type = "windows")
+MG <- plot(mut_grid)
+dev.off()
+```
+```{r}
+
+KRAS_det_join_neo_adj <- KRAS_df %>% 
+  left_join(pat_det, by = "Sample_ID")
+
+KRAS_det_join_neo_adj <- KRAS_det_join_neo_adj %>% 
+  arrange(Allele_frequency, NPL_ratio, OS.) %>% 
+  mutate(Sample_ID = factor(Sample_ID, levels = unique(Sample_ID)),
+         AA_change = factor(AA_change, levels = unique(AA_change)),
+         Treatment_group = factor(case_when(Treatment_group == "1" | Treatment_group == "3" | Treatment_group == "4" ~ "Neoadjuvant",
+                                    Treatment_group == "2a" | Treatment_group == "2b" ~ "Adjuvant")))
+
+
+group_adj <- KRAS_det_join_neo_adj %>% 
+  filter(Treatment_group == "Adjuvant") %>% 
+  ggplot () + 
+  geom_bar(aes(x = Sample_ID, y = Allele_frequency, fill = AA_change),
+           stat = "identity") +
+    theme_minimal() +
+      theme(axis.text.x=element_blank(),
+            # axis.text.y = element_blank(),
+            # axis.ticks.y.left = element_blank(),
+            panel.grid.major = element_blank(),
+            axis.ticks = element_blank(),
+            plot.title = element_text(hjust = 0.5, size = 20)) +
+            # legend.position = "right",
+            # legend.position = "right",
+            # legend.key = element_blank(),
+            # legend.direction = "horizontal",
+            # legend.title = element_text(hjust = 0.5),
+            # legend.key.width = unit(1.5, "cm"),
+            # legend.text = element_text(margin = margin(r = 0.2, unit = 'cm'),
+            #                            hjust = 0.5),
+            # legend.spacing.x = unit(0.05, 'cm'),
+            # plot.margin = unit(c(-0.2, 0, 0, -0.2), "cm")) +
+      guides(fill=guide_legend(nrow = 1, label.position = "top",
+                               title.position = "top")) +
+        labs(x = element_blank(), y = element_blank(),
+           fill = element_text("Aminoacid change"), title = "Adjuvant") +
+  scale_fill_manual(values = AA_palette) +
+  ylim(0, 100)
+
+group_adj_leg <- get_legend(group_adj)
+group_adj_no_leg <- group_adj +
+  theme(legend.position = "none")
+
+group_neo <- KRAS_det_join_neo_adj %>% 
+  filter(Treatment_group == "Neoadjuvant") %>% 
+  ggplot () + 
+  geom_bar(aes(x = Sample_ID, y = Allele_frequency, fill = AA_change),
+           stat = "identity") +
+    theme_minimal() +
+      theme(axis.text.x=element_blank(),
+            # axis.text.y = element_blank(),
+            # axis.ticks.y.left = element_blank(),
+            panel.grid.major = element_blank(),
+            axis.ticks = element_blank(),
+            legend.position = "right",
+            plot.title = element_text(hjust = 0.5, size = 20)) +
+            # legend.position = "right",
+            # legend.key = element_blank(),
+            # legend.direction = "horizontal",
+            # legend.title = element_text(hjust = 0.5),
+            # legend.key.width = unit(1.5, "cm"),
+            # legend.text = element_text(margin = margin(r = 0.2, unit = 'cm'),
+            #                            hjust = 0.5),
+            # legend.spacing.x = unit(0.05, 'cm'),
+            # plot.margin = unit(c(0, 0, 0, -0.2), "cm")) +
+      guides(fill=guide_legend(nrow = 1, label.position = "top",
+                               title.position = "top")) +
+        labs(x = element_blank(), y = element_blank(),
+           fill = element_text("Aminoacid change"), title = "Neoadjuvant") +
+  scale_fill_manual(values = AA_palette) +
+  ylim(0, 100)
+
+group_neo_leg <- get_legend(group_neo)
+group_neo_no_leg <- group_neo +
+  theme(legend.position = "none")
+
+tum_purity_adj <- KRAS_det_join_neo_adj %>%
+  filter(Treatment_group == "Adjuvant") %>%
+  ggplot(aes(x = Sample_ID, y = y_axis, fill = NPL_ratio)) +
+  geom_tile(width = 0.9, height = 0.9) +
+    theme_minimal() +
+      theme(axis.text.x=element_blank(),
+            # axis.text.y = element_blank(),
+            panel.grid.major = element_blank(),
+      #       axis.ticks = element_blank(),
+      #       legend.position = "right",
+      #       legend.key = element_blank(),
+            legend.direction = "horizontal") +
+      #       legend.title = element_text(hjust = 0.5),
+      #       legend.key.width = unit(1.5, "cm"),
+      #       legend.text = element_text(margin = margin(r = 0.2, unit = 'cm'),
+      #                                  hjust = 0.5),
+      #       legend.spacing.x = unit(0.05, 'cm'),
+      #       plot.margin = unit(c(-0.2, 0, 0, -0.2), "cm")) +
+      # guides(fill=guide_legend(nrow = 1, label.position = "top",
+      #                          title.position = "top")) +
+      scale_fill_distiller(name = "Tumor purity (%)", direction = 1,
+                           na.value = "grey80", palette = "Greys") +
+      labs(x = element_blank(), y = element_blank())
+
+tum_purity_adj_leg <- get_legend(tum_purity_adj)
+tum_purity_adj_no_leg <- tum_purity_adj +
+  theme(legend.position = "none")
+
+tum_purity_neo <- KRAS_det_join_neo_adj %>%
+  filter(Treatment_group == "Neoadjuvant") %>%
+  ggplot(aes(x = Sample_ID, y = y_axis, fill = NPL_ratio)) +
+  geom_tile(width = 0.9, height = 0.9) +
+    theme_minimal() +
+      theme(axis.text.x=element_blank(),
+            # axis.text.y = element_blank(),
+            panel.grid.major = element_blank(),
+      #       axis.ticks = element_blank(),
+      #       legend.position = "right",
+      #       legend.key = element_blank(),
+            legend.direction = "horizontal") +
+      #       legend.title = element_text(hjust = 0.5),
+      #       legend.key.width = unit(1.5, "cm"),
+      #       legend.text = element_text(margin = margin(r = 0.2, unit = 'cm'),
+      #                                  hjust = 0.5),
+      #       legend.spacing.x = unit(0.05, 'cm'),
+      #       plot.margin = unit(c(-0.2, 0, 0, -0.2), "cm")) +
+      # guides(fill=guide_legend(nrow = 1, label.position = "top",
+      #                          title.position = "top")) +
+      scale_fill_distiller(name = "Tumor purity (%)", direction = 1,
+                           na.value = "grey80", palette = "Greys") +
+      labs(x = element_blank(), y = element_blank())
+
+tum_purity_neo_leg <- get_legend(tum_purity_neo)
+tum_purity_neo_no_leg <- tum_purity_neo +
+  theme(legend.position = "none")
+
+coverage_adj <- KRAS_det_join_neo_adj %>%
+  filter(Treatment_group == "Adjuvant") %>%
+  ggplot(aes(x = Sample_ID, y = y_axis, fill = Coverage)) +
+  geom_tile(width = 0.9, height = 0.9) +
+    theme_minimal() +
+      theme(axis.text.x=element_blank(),
+            # axis.text.y = element_blank(),
+            panel.grid.major = element_blank(),
+      #       axis.ticks = element_blank(),
+      #       legend.position = "right",
+      #       legend.key = element_blank(),
+            legend.direction = "horizontal") +
+      #       legend.title = element_text(hjust = 0.5),
+      #       legend.key.width = unit(1.5, "cm"),
+      #       legend.text = element_text(margin = margin(r = 0.2, unit = 'cm'),
+      #                                  hjust = 0.5),
+      #       legend.spacing.x = unit(0.05, 'cm'),
+      #       plot.margin = unit(c(-0.2, 0, 0, -0.2), "cm")) +
+      # guides(fill=guide_legend(nrow = 1, label.position = "top",
+      #                          title.position = "top")) +
+      scale_fill_distiller(name = "Coverage (X)", direction = 1,
+                           na.value = "grey80", palette = "Reds") +
+      labs(x = element_blank(), y = element_blank())
+
+coverage_adj_leg <- get_legend(coverage_adj)
+coverage_adj_no_leg <- coverage_adj +
+  theme(legend.position = "none")
+
+coverage_neo <- KRAS_det_join_neo_adj %>%
+  filter(Treatment_group == "Neoadjuvant") %>%
+  ggplot(aes(x = Sample_ID, y = y_axis, fill = Coverage)) +
+  geom_tile(width = 0.9, height = 0.9) +
+    theme_minimal() +
+      theme(axis.text.x=element_blank(),
+            # axis.text.y = element_blank(),
+            panel.grid.major = element_blank(),
+      #       axis.ticks = element_blank(),
+      #       legend.position = "right",
+      #       legend.key = element_blank(),
+            legend.direction = "horizontal") +
+      #       legend.title = element_text(hjust = 0.5),
+      #       legend.key.width = unit(1.5, "cm"),
+      #       legend.text = element_text(margin = margin(r = 0.2, unit = 'cm'),
+      #                                  hjust = 0.5),
+      #       legend.spacing.x = unit(0.05, 'cm'),
+      #       plot.margin = unit(c(-0.2, 0, 0, -0.2), "cm")) +
+      # guides(fill=guide_legend(nrow = 1, label.position = "top",
+      #                          title.position = "top")) +
+      scale_fill_distiller(name = "Coverage (X)", direction = 1,
+                           na.value = "grey80", palette = "Reds",
+                           limits=c(0,2000)) +
+      labs(x = element_blank(), y = element_blank())
+
+coverage_neo_leg <- get_legend(coverage_neo)
+coverage_neo_no_leg <- coverage_neo +
+  theme(legend.position = "none")
+
+concordance_adj <- KRAS_det_join_neo_adj %>%
+  filter(Treatment_group == "Adjuvant") %>%
+  ggplot(aes(x = Sample_ID, y = y_axis, fill = Cytology)) +
+  geom_tile(width = 0.9, height = 0.9) +
+    theme_minimal() +
+      theme(axis.text.x=element_blank(),
+            # axis.text.y = element_blank(),
+            panel.grid.major = element_blank(),
+      #       axis.ticks = element_blank(),
+      #       legend.position = "right",
+      #       legend.key = element_blank(),
+            legend.direction = "horizontal") +
+      #       legend.title = element_text(hjust = 0.5),
+      #       legend.key.width = unit(1.5, "cm"),
+      #       legend.text = element_text(margin = margin(r = 0.2, unit = 'cm'),
+      #                                  hjust = 0.5),
+      #       legend.spacing.x = unit(0.05, 'cm'),
+      #       plot.margin = unit(c(-0.2, 0, 0, -0.2), "cm")) +
+      # guides(fill=guide_legend(nrow = 1, label.position = "top",
+      #                          title.position = "top")) +
+      scale_fill_discrete() +
+      labs(x = element_blank(), y = element_blank())
+
+concordance_adj_leg <- get_legend(concordance_adj)
+concordance_adj_no_leg <- concordance_adj +
+  theme(legend.position = "none")
+
+concordance_neo <- KRAS_det_join_neo_adj %>%
+  filter(Treatment_group == "Neoadjuvant") %>%
+  ggplot(aes(x = Sample_ID, y = y_axis, fill = Cytology)) +
+  geom_tile(width = 0.9, height = 0.9) +
+    theme_minimal() +
+      theme(axis.text.x=element_blank(),
+            # axis.text.y = element_blank(),
+            panel.grid.major = element_blank(),
+      #       axis.ticks = element_blank(),
+      #       legend.position = "right",
+      #       legend.key = element_blank(),
+            legend.direction = "horizontal") +
+      #       legend.title = element_text(hjust = 0.5),
+      #       legend.key.width = unit(1.5, "cm"),
+      #       legend.text = element_text(margin = margin(r = 0.2, unit = 'cm'),
+      #                                  hjust = 0.5),
+      #       legend.spacing.x = unit(0.05, 'cm'),
+      #       plot.margin = unit(c(-0.2, 0, 0, -0.2), "cm")) +
+      # guides(fill=guide_legend(nrow = 1, label.position = "top",
+      #                          title.position = "top")) +
+      scale_fill_discrete() +
+      labs(x = element_blank(), y = element_blank())
+
+concordance_neo_leg <- get_legend(concordance_neo)
+concordance_neo_no_leg <- concordance_neo +
+  theme(legend.position = "none")
+
+mut_grid_neo_adj <- plot_grid(group_adj_no_leg, group_neo_no_leg, 
+          tum_purity_adj_no_leg, tum_purity_neo_no_leg, 
+          coverage_adj_no_leg, coverage_neo_no_leg,
+          concordance_adj_no_leg, concordance_neo_no_leg,
+          ncol = 2, align = "v", rel_heights = c(4, 0.5, 0.5, 0.5), rel_widths = c(0.7, 1))
+
+plot_grid(group_adj_leg, tum_purity_adj_leg, coverage_adj_leg, concordance_adj_leg,
+          ncol = 1)
+```
+```{r}
+pdf(here("NGS/figures", "mut_grid_neo_adj.pdf"), width = 30, height = 15)
+MGNA <- plot(mut_grid_neo_adj)
+dev.off()
+
+jpeg(here("NGS/figures", "mut_grid_neo_ad.jpeg"), width = 60, height = 15, units = "cm",
+     res = 72, type = "windows")
+MGNA <- plot(mut_grid_neo_adj)
+dev.off()
+```
+```{r}
+df_30_50 <- KRAS_det_join_neo_adj %>% 
+  filter(between(NPL_ratio, 30, 50)) 
+
+group_adj_30_50 <- df_30_50 %>% 
+  filter(Treatment_group == "Adjuvant") %>% 
+  ggplot () + 
+  geom_bar(aes(x = Sample_ID, y = Allele_frequency, fill = AA_change),
+           stat = "identity") +
+    theme_minimal() +
+      theme(axis.text.x=element_blank(),
+            # axis.text.y = element_blank(),
+            # axis.ticks.y.left = element_blank(),
+            panel.grid.major = element_blank(),
+            axis.ticks = element_blank(),
+            plot.title = element_text(hjust = 0.5, size = 20)) +
+            # legend.position = "right",
+            # legend.position = "right",
+            # legend.key = element_blank(),
+            # legend.direction = "horizontal",
+            # legend.title = element_text(hjust = 0.5),
+            # legend.key.width = unit(1.5, "cm"),
+            # legend.text = element_text(margin = margin(r = 0.2, unit = 'cm'),
+            #                            hjust = 0.5),
+            # legend.spacing.x = unit(0.05, 'cm'),
+            # plot.margin = unit(c(-0.2, 0, 0, -0.2), "cm")) +
+      guides(fill=guide_legend(nrow = 1, label.position = "top",
+                               title.position = "top")) +
+        labs(x = element_blank(), y = element_blank(),
+           fill = element_text("Aminoacid change"), title = "Adjuvant") +
+  scale_fill_manual(values = AA_palette) +
+  ylim(0, 100)
+
+group_adj_30_50_leg <- get_legend(group_adj_30_50)
+group_adj_30_50_no_leg <- group_adj_30_50 +
+  theme(legend.position = "none")
+
+group_neo_30_50 <- df_30_50 %>% 
+  filter(Treatment_group == "Neoadjuvant") %>% 
+  ggplot () + 
+  geom_bar(aes(x = Sample_ID, y = Allele_frequency, fill = AA_change),
+           stat = "identity") +
+    theme_minimal() +
+      theme(axis.text.x=element_blank(),
+            # axis.text.y = element_blank(),
+            # axis.ticks.y.left = element_blank(),
+            panel.grid.major = element_blank(),
+            axis.ticks = element_blank(),
+            legend.position = "right",
+            plot.title = element_text(hjust = 0.5, size = 20)) +
+            # legend.position = "right",
+            # legend.key = element_blank(),
+            # legend.direction = "horizontal",
+            # legend.title = element_text(hjust = 0.5),
+            # legend.key.width = unit(1.5, "cm"),
+            # legend.text = element_text(margin = margin(r = 0.2, unit = 'cm'),
+            #                            hjust = 0.5),
+            # legend.spacing.x = unit(0.05, 'cm'),
+            # plot.margin = unit(c(0, 0, 0, -0.2), "cm")) +
+      guides(fill=guide_legend(nrow = 1, label.position = "top",
+                               title.position = "top")) +
+        labs(x = element_blank(), y = element_blank(),
+           fill = element_text("Aminoacid change"), title = "Neoadjuvant") +
+  scale_fill_manual(values = AA_palette) +
+  ylim(0, 100)
+
+group_neo_30_50_leg <- get_legend(group_neo_30_50)
+group_neo_30_50_no_leg <- group_neo_30_50 +
+  theme(legend.position = "none")
+
+tum_purity_adj_30_50 <- df_30_50 %>%
+  filter(Treatment_group == "Adjuvant") %>%
+  ggplot(aes(x = Sample_ID, y = y_axis, fill = NPL_ratio)) +
+  geom_tile(width = 0.9, height = 0.9) +
+    theme_minimal() +
+      theme(axis.text.x=element_blank(),
+            # axis.text.y = element_blank(),
+            panel.grid.major = element_blank(),
+      #       axis.ticks = element_blank(),
+      #       legend.position = "right",
+      #       legend.key = element_blank(),
+            legend.direction = "horizontal") +
+      #       legend.title = element_text(hjust = 0.5),
+      #       legend.key.width = unit(1.5, "cm"),
+      #       legend.text = element_text(margin = margin(r = 0.2, unit = 'cm'),
+      #                                  hjust = 0.5),
+      #       legend.spacing.x = unit(0.05, 'cm'),
+      #       plot.margin = unit(c(-0.2, 0, 0, -0.2), "cm")) +
+      # guides(fill=guide_legend(nrow = 1, label.position = "top",
+      #                          title.position = "top")) +
+      scale_fill_distiller(name = "Tumor purity (%)", direction = 1,
+                           na.value = "grey80", palette = "Greys") +
+      labs(x = element_blank(), y = element_blank())
+
+tum_purity_adj_30_50_leg <- get_legend(tum_purity_adj_30_50)
+tum_purity_adj_30_50_no_leg <- tum_purity_adj_30_50 +
+  theme(legend.position = "none")
+
+tum_purity_neo_30_50 <- df_30_50 %>%
+  filter(Treatment_group == "Neoadjuvant") %>%
+  ggplot(aes(x = Sample_ID, y = y_axis, fill = NPL_ratio)) +
+  geom_tile(width = 0.9, height = 0.9) +
+    theme_minimal() +
+      theme(axis.text.x=element_blank(),
+            # axis.text.y = element_blank(),
+            panel.grid.major = element_blank(),
+      #       axis.ticks = element_blank(),
+      #       legend.position = "right",
+      #       legend.key = element_blank(),
+            legend.direction = "horizontal") +
+      #       legend.title = element_text(hjust = 0.5),
+      #       legend.key.width = unit(1.5, "cm"),
+      #       legend.text = element_text(margin = margin(r = 0.2, unit = 'cm'),
+      #                                  hjust = 0.5),
+      #       legend.spacing.x = unit(0.05, 'cm'),
+      #       plot.margin = unit(c(-0.2, 0, 0, -0.2), "cm")) +
+      # guides(fill=guide_legend(nrow = 1, label.position = "top",
+      #                          title.position = "top")) +
+      scale_fill_distiller(name = "Tumor purity (%)", direction = 1,
+                           na.value = "grey80", palette = "Greys") +
+      labs(x = element_blank(), y = element_blank())
+
+tum_purity_neo_30_50_leg <- get_legend(tum_purity_neo_30_50)
+tum_purity_neo_30_50_no_leg <- tum_purity_neo_30_50 +
+  theme(legend.position = "none")
+
+mut_grid_neo_adj_30_50 <- plot_grid(group_adj_30_50_no_leg, group_neo_30_50_no_leg, 
+          tum_purity_adj_30_50_no_leg, tum_purity_neo_30_50_no_leg, 
+          ncol = 2, align = "v", rel_heights = c(4, 0.5), rel_widths = c(0.7, 1))
+  
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

@@ -1,0 +1,283 @@
+---
+title: "km_13112020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r cars}
+library("tidyverse")
+library("here")
+library("gtsummary")
+library("survival")
+library("survminer")
+library("broom")
+library("cowplot")
+library("survivalAnalysis")
+# library("metagen")
+library("tinytex")
+library("coxphf")
+```
+
+```{r pressure, echo=FALSE}
+tile_data <- read.csv(here("NGS/data", "mutations_MASISACHI.csv"), 
+                      na.strings = "", sep = ";", stringsAsFactors = FALSE) %>% 
+  t() 
+colnames(tile_data) <- tile_data[1, ]
+tile_data <- tile_data[-1, ]
+tile_data[is.na(tile_data)] <- "WT"
+tile_data <- as.data.frame(tile_data) %>% 
+  rownames_to_column(., "AUS_ID") %>% 
+    filter(c(AUS_ID != "ID_09" & AUS_ID != "ID_12" & AUS_ID != "ID_60" &
+           AUS_ID !="ID_61" & AUS_ID != "ID_63" & AUS_ID != "ID_66" &
+           AUS_ID != "ID_69" & AUS_ID != "ID_71" & AUS_ID != "ID_73" &
+           AUS_ID != "ID_74" & AUS_ID != "ID_77" & AUS_ID != "ID_80" &
+           AUS_ID != "ID_87" & AUS_ID != "ID_93" & AUS_ID !=  "ID_103"
+           & AUS_ID !=  "ID_65"))
+
+# morpho_data <- read.csv(here("NGS/data","MASISACHI_morphology.csv"), 
+#                       na.strings = "", sep = ";", stringsAsFactors = FALSE)
+# 
+# survival <- tile_data %>% 
+#   left_join(morpho_data, by = "AUS_ID") %>% 
+#   filter(c(AUS_ID != "ID_09" & AUS_ID != "ID_12" & AUS_ID != "ID_60" &
+#            AUS_ID !="ID_61" & AUS_ID != "ID_63" & AUS_ID != "ID_66" &
+#            AUS_ID != "ID_69" & AUS_ID != "ID_71" & AUS_ID != "ID_73" &
+#            AUS_ID != "ID_74" & AUS_ID != "ID_77" & AUS_ID != "ID_80" &
+#            AUS_ID != "ID_87" & AUS_ID != "ID_93" & AUS_ID !=  "ID_103")) 
+
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+```{r}
+df_survival <- read.csv(here("NGS/data", "MASISACHI MASTER SPREADSHEET 27-07-2020.csv"), sep = ";", 
+               stringsAsFactors = FALSE, skip = 1, nrows = 113, na.strings = "")
+
+colnames(df_survival) <- df_survival[1,] %>% # set col names from first row
+  str_remove_all("#") %>% # remove # from headers
+  str_replace_all(" ", "_") %>% # remove spaces
+  str_replace_all("\\*", "new") %>% 
+  str_replace_all("\\/", "_") %>% 
+  str_replace_all("\\%", "perc") %>% 
+  str_remove_all("_$") # remove spaces at the end of headers
+df_survival <- df_survival[-1, ] # remove first row
+
+df_survival <- df_survival %>%
+  select(AUS_ID, Treatment, Age, Sex, Site, LN_Ratio, G, Nnew, R, Dispersion,
+         PN_Inv., Emb., Lymphnodes, Necr., Vasi, PanIN_IPMN, Keloid, Hyaline,
+         Str.cell., perc_stroma, TLS, Lymph., Gran., M0, Regr._D,
+ LN_Ratio_Rank,
+         census_event_free, DFS, census_OS, OS) %>% 
+  filter(AUS_ID != "ID_67" & AUS_ID != "ID_111" & AUS_ID != "ID_18" &
+         AUS_ID != "ID_02", AUS_ID != "ID_45", AUS_ID != "ID_55") # remove two excluded cases
+
+# set the survival data as numeric in a separate df
+
+df_surv_data <- df_survival %>% 
+  select(AUS_ID, census_event_free, DFS, census_OS, OS) %>% 
+  mutate(AUS_ID = as.factor(AUS_ID)) %>% 
+  mutate_if(is.character, as.numeric)
+
+# modify the variables
+
+df_survival <- df_survival %>% 
+  select(-census_event_free, -DFS, -census_OS, -OS) %>% 
+  mutate(Sex = case_when(Sex == "M" ~ "0",
+                         Sex == "F" ~ "1"),
+         Site = case_when(Site == "Head" ~ "1",
+                          Site == "Body" ~ "2"),
+         Dispersion = case_when(Dispersion == "0" ~ "Absent",
+                                Dispersion == "1" | Dispersion == "2" ~ "Present"),
+         G = case_when(G == "G2" ~ "1",
+                       G == "G1" ~ "2",
+                       G == "G3" ~ "3"),
+         # Nnew = case_when(Nnew == "pN0" ~ "0",
+         #                  Nnew == "pN1" ~ "1",
+         #                  Nnew == "pN2" ~ "2"),
+         # R = case_when(R == "R0" ~ "0",
+         #               R == "R1" ~ "1"),
+         PN_Inv. = case_when(PN_Inv. == "0" ~ "0",
+                             PN_Inv. == "1" | PN_Inv. == "2" | PN_Inv. == "3" ~ "1"),
+         Emb. = case_when(Emb. == "0" ~ "0",
+                          Emb. == "1" | Emb. == "2" | Emb. == "3" ~ "1"),
+         Necr. = case_when(Necr. == "0" ~ "0",
+                           Necr. == "1" | Necr. == "2" ~ "1"),
+         Vasi = case_when(Vasi == "0" ~ "0",
+                          Vasi == "1" | Vasi == "2" | Vasi == "3" ~ "1"),
+         PanIN_IPMN = case_when(PanIN_IPMN == "0" ~ "0",
+                                PanIN_IPMN == "1" | PanIN_IPMN == "2" | PanIN_IPMN == "3" ~ "1"),
+         Gran. = case_when(Gran. == "0" ~ "0",
+                           Gran. == "1" | Gran. == "2" | Gran. == "3" ~ "1"),
+         Lymph. = case_when(Lymph. == "0"  ~ "0",
+                            Lymph. == "1" | Lymph. == "2" | Lymph. == "3" ~ "1"),
+         M0 = case_when(M0 == "0" ~ "0",
+                        M0 == "1" | M0 == "2" | M0 == "3" ~ "1"))
+
+
+# Change the column form character to numeric for continuous variables
+
+cols.num <- c("Age", "LN_Ratio")
+df_survival[cols.num] <- sapply(df_survival[cols.num],as.numeric)
+
+# and to factor for categorical variables
+
+df_survival <- df_survival %>% mutate_if(is.character,as.factor)
+
+# join the dataframes
+
+df_survival <- df_survival %>% 
+  left_join(df_surv_data, by = "AUS_ID")
+```
+```{r Leveling the factors, echo=FALSE}
+
+df_survival <- df_survival %>%
+  mutate(Sex = factor(Sex,
+                      levels = 0:1,
+                      labels = c("Male", "Female")),
+         
+         Site = factor(Site, 
+                       levels = 1:2,
+                       labels = c("Head", "Body")),
+         # Dispersion = factor(Dispersion,
+         #                     levels = 0:1,
+         #                     labels = c("Absent", "Present")),
+         G = factor(G,
+                    levels = 1:3,
+                    labels = c("G2", "G1", "G3")),
+         PN_Inv.= factor(PN_Inv.,
+                         levels = 0:1,
+                         labels = c("Absent", "Present")),
+         Emb. = factor(Emb.,
+                       levels = 0:1,
+                       labels = c("Absent", "Present")),
+         Lymphnodes = factor(Lymphnodes,
+                             levels = 0:3,
+                             labels = c("Absent", "1 positive lymphnode",
+                                        "2-3 positive lymphnodes",
+                                        ">3 positive lymphnodes")),
+         Necr. = factor(Necr.,
+                        levels = 0:1,
+                        labels = c("Absent", "Present")),
+         Vasi = factor(Vasi,
+                       levels = 0:1,
+                       labels = c("Absent", "Present")),
+         PanIN_IPMN = factor(PanIN_IPMN,
+                             levels = 0:1,
+                             labels = c("Absent", "Present")),
+         Keloid = factor(Keloid,
+                         levels = 0:1,
+                         labels = c("Absent", "Present")),
+         Hyaline = factor(Hyaline,
+                          levels = 0:1,
+                          labels = c("Absent", "Present")),
+         Str.cell. = factor(Str.cell.,
+                            levels = 0:1,
+                            labels = c("Absent", "Present")),
+         perc_stroma = factor(perc_stroma,
+                              levels = 1:3,
+                              labels = c("Stroma < Neoplasia",
+                                         "Stroma = Neoplasia",
+                                         "Stroma > Neoplasia")),
+         TLS = factor(TLS,
+                      levels = 0:1,
+                      labels = c("Absent", "Present")),
+         Lymph.= factor(Lymph.,
+                        levels = 0:1,
+                        labels = c("Absent", "Present")),
+         Gran.= factor(Gran.,
+                       levels = 0:1,
+                       labels = c("Absent", "Present")),
+         M0= factor(M0,
+                    levels = 0:1,
+                    labels = c("Absent", "Present")),
+         LN_Ratio_Rank = factor(LN_Ratio_Rank,
+                                levels = 0:1,
+                                labels = c("Absent", "Present")),
+         Regr._D = factor(Regr._D,
+                                levels = 0:2,
+                                labels = c("Absent", "Focal", "Diffuse")))
+
+df_survival$Nnew <- fct_recode(df_survival$Nnew, NULL = "NV")
+df_survival$G <- fct_recode(df_survival$G, NULL = "GX" , NULL = "G1")
+df_survival$LN_Ratio_Rank <- fct_recode(df_survival$LN_Ratio_Rank, NULL = "NV")
+
+
+df_survival <- df_survival %>% 
+  rename(Grade = G, Nodes = Nnew, Resection_margin = R, 
+         Perineural_invasion = PN_Inv., Vascular_invasion = Emb.,
+         Necrosis = Necr., Vascular_alteration = Vasi,
+         Cellular_stroma = Str.cell., Stroma_Neoplasia_Ratio = perc_stroma,
+         Lymphocytes = Lymph., Granulocytes = Gran.,
+         Macrophages = M0, Regressive_changes = Regr._D) 
+
+df_survival <- df_survival %>% 
+  select(-census_event_free, -DFS, -census_OS, -OS) %>%
+  mutate(Lymphnodes = case_when(Lymphnodes == "Absent" | 
+                                  Lymphnodes == "1 positive lymphnode" ~ "0",
+                                Lymphnodes == "2-3 positive lymphnodes" |
+                                  Lymphnodes == ">3 positive lymphnodes" ~ "1"),
+         Stroma_Neoplasia_Ratio = case_when(
+           Stroma_Neoplasia_Ratio == "Stroma < Neoplasia" |
+             Stroma_Neoplasia_Ratio == "Stroma = Neoplasia" ~ "0",
+           Stroma_Neoplasia_Ratio == "Stroma > Neoplasia" ~ "1"))
+
+df_survival <- df_survival %>%
+  mutate(Lymphnodes = factor(Lymphnodes,
+                             levels = 0:1,
+                        labels = c("0-1", ">2")),
+         Stroma_Neoplasia_Ratio = factor(Stroma_Neoplasia_Ratio,
+                              levels = 0:1,
+                              labels = c("Neoplasia >= Stroma",
+                                         "Stroma > Neoplasia")))
+
+df_survival <- df_survival %>% 
+  left_join(df_surv_data, by = "AUS_ID")
+
+survival <- tile_data %>% 
+  left_join(df_survival, by = "AUS_ID")
+
+survival <- survival %>% 
+  filter(c(AUS_ID != "ID_09" & AUS_ID != "ID_12" & AUS_ID != "ID_60" &
+           AUS_ID !="ID_61" & AUS_ID != "ID_63" & AUS_ID != "ID_66" & 
+           AUS_ID != "ID_69" & AUS_ID != "ID_71" & AUS_ID != "ID_73" &
+           AUS_ID != "ID_74" & AUS_ID != "ID_77" & AUS_ID != "ID_80" & 
+           AUS_ID != "ID_87" & AUS_ID != "ID_93" & AUS_ID !=  "ID_103" &
+           AUS_ID != "ID_67" & AUS_ID != "ID_111" & AUS_ID != "ID_18" &
+           AUS_ID != "ID_02" & AUS_ID != "ID_45" & AUS_ID != "ID_55")) %>% 
+    mutate(KRAS = case_when(KRAS != "WT" ~ "MUT",
+                          KRAS == "WT" ~ "WT"),
+           TP53 = case_when(TP53 != "WT" ~ "MUT",
+                          TP53 == "WT" ~ "WT"),
+           Group = case_when(Treatment == "Periop PEXG" | 
+                                         Treatment == "Primary PEXG" | 
+                                         Treatment == "Primary PEFG" | 
+                                         Treatment == "Primary PAXG" | 
+                                         Treatment == "Primary AG"| 
+                                         Treatment == "Primary PDXG" ~ "Neoadjuvant",
+                                    Treatment == "Adj GEM" | 
+                                      Treatment == "Adj PEXG" ~ "Adjuvant"))
+
+
+# survival <- survival %>% 
+#   filter(Group == "Neoadjuvant")
+
+
+fit <- survfit(formula = Surv(OS, census_OS) ~ TP53, 
+                               data = survival)  
+ggsurvplot(fit, 
+           pval = TRUE, 
+           risk.table = TRUE,
+           color = "strata",
+           legend.labs = c("TP53 mutated", "TP53 wild type"),
+           surv.median.line = "hv", # Specify median survival
+           linetype = "strata",
+           risk.table.height = 0.3,
+           tables.y.text = FALSE,
+           palette = c("#d7191c", "#2c7bb6", "#008837", "#7b3294"),
+           xlab = "Months",
+           ggtheme = theme_bw())
+```
